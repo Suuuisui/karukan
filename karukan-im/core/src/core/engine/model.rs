@@ -266,14 +266,40 @@ impl InputMethodEngine {
     /// the cost stays bounded however long the reading grows. An empty
     /// result means "the model produced nothing"; a candidate equal to the
     /// reading is a real answer (kana-only words convert to themselves).
+    ///
+    /// A user-dictionary word pinned at the head of the reading leads the
+    /// list (偲称乃さん, 偲称乃産…); the model's own reading of the whole
+    /// input follows it, so a pin the user did not mean is one candidate
+    /// away instead of gone.
     pub(super) fn model_candidates(&mut self, reading: &str, num_candidates: usize) -> Vec<String> {
         if !karukan_engine::contains_kana(reading) {
             return Vec::new();
         }
+        let chars: Vec<char> = reading.chars().collect();
+        let pinned = self
+            .plan_chunks(&chars, true)
+            .iter()
+            .any(|c| c.pinned.is_some());
+        let candidates = self.model_candidates_on_grid(reading, num_candidates, true);
+        if !pinned {
+            return candidates;
+        }
+        let plain = self.model_candidates_on_grid(reading, num_candidates, false);
+        Self::merge_candidates_dedup(candidates, plain, usize::MAX)
+    }
+
+    /// [`Self::model_candidates`] on one grid: the pinned one (`pin`) or the
+    /// model's alone.
+    fn model_candidates_on_grid(
+        &mut self,
+        reading: &str,
+        num_candidates: usize,
+        pin: bool,
+    ) -> Vec<String> {
         let base_ctx = self.truncate_context_for_api();
         let chars: Vec<char> = reading.chars().collect();
-        let span_start = self.beam_span_start(&chars);
-        let prefix = self.convert_on_chunk_grid(&chars[..span_start], &base_ctx);
+        let span_start = self.trailing_chunks_start(&chars, self.config.beam_chars, pin);
+        let prefix = self.convert_on_chunk_grid(&chars[..span_start], &base_ctx, pin);
 
         // Nothing to beam (the reading ends outside Japanese): the grid
         // conversion is the only candidate.
@@ -310,6 +336,6 @@ impl InputMethodEngine {
     /// converted, which costs an extra inference and shows a seam the user
     /// never saw, and could feed a digit run to the model.
     pub(super) fn beam_span_start(&self, chars: &[char]) -> usize {
-        self.trailing_chunks_start(chars, self.config.beam_chars)
+        self.trailing_chunks_start(chars, self.config.beam_chars, true)
     }
 }

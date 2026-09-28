@@ -20,6 +20,7 @@ mod live_conversion;
 mod mode_toggle;
 mod passthrough;
 mod pending_romaji;
+mod pinned;
 mod predictive;
 mod rewriter;
 mod source_filter;

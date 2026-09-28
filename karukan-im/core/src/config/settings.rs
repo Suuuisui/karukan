@@ -189,6 +189,11 @@ pub struct ConversionSettings {
     pub beam_chars: usize,
     /// Beam width: how many alternatives the beam returns
     pub beam_width: usize,
+    /// What may follow a user-dictionary word at the head of the reading for
+    /// the word to be pinned to its dictionary surface instead of going
+    /// through the model with what follows it. Particles and honorifics.
+    #[serde(default)]
+    pub dict_suffixes: Vec<String>,
     /// Maximum acceptable latency in milliseconds for auto-suggest (0 = disabled)
     /// When a main model conversion exceeds this, the engine adaptively switches to light_model
     pub max_latency_ms: u64,

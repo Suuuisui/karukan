@@ -10,7 +10,11 @@
 //! or left context actually changed reach the model.
 //!
 //! Where the boundaries fall is [`split`], which knows nothing of the
-//! engine.
+//! engine. A user-dictionary word at the head of the reading becomes a
+//! chunk of its own whose text is pinned to the dictionary surface instead
+//! of going through the model ([`pin`]), so 「しほのさん」 converts as
+//! 偲称乃 + さん rather than one model guess.
+mod pin;
 mod split;
 
 use tracing::debug;
@@ -20,6 +24,19 @@ use split::{ChunkLimits, group_chunks};
 pub(super) use split::is_japanese;
 
 use super::*;
+
+/// One planned chunk of the reading: the text the model converts, or a
+/// user-dictionary word whose surface is pinned (no model call). The plan
+/// is what both live conversion and the explicit conversion's grid walk,
+/// so a pinned word is a wall for the beam span the same way a manual
+/// break is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ChunkPlan {
+    pub reading: String,
+    /// The surface this chunk is pinned to, when a user-dictionary word
+    /// covers it; `None` sends the reading to the model.
+    pub pinned: Option<String>,
+}
 
 impl InputMethodEngine {
     /// Auto-suggest over the composing buffer via [`Self::convert_chunks`],
@@ -36,7 +53,7 @@ impl InputMethodEngine {
         let text: Vec<char> = full_reading.chars().collect();
         let base_ctx = self.truncate_context_for_api();
 
-        let chunks = self.convert_chunks(&text, &base_ctx);
+        let chunks = self.convert_chunks(&text, &base_ctx, true);
         let combined: String = chunks.iter().map(|c| c.converted.as_str()).collect();
 
         self.chunks = chunks;
@@ -49,35 +66,87 @@ impl InputMethodEngine {
     /// [`group_chunks`], each chunk built with the converted text of the
     /// preceding chunks as its left context. Live conversion and the
     /// explicit conversion's grid replay share it, so the two can never
-    /// disagree about where the boundaries are.
-    fn convert_chunks(&mut self, chars: &[char], base_ctx: &str) -> Vec<ComposingChunk> {
-        let groups = self.split_chunks(chars);
+    /// disagree about where the boundaries are. With `pin`, a
+    /// user-dictionary word at the head of the reading is pinned to its
+    /// surface (see [`Self::plan_chunks`]); without it the grid is the
+    /// model's alone.
+    fn convert_chunks(&mut self, chars: &[char], base_ctx: &str, pin: bool) -> Vec<ComposingChunk> {
+        let plan = self.plan_chunks(chars, pin);
         let mut chunks: Vec<ComposingChunk> = Vec::new();
         let mut combined = String::new();
-        for reading in groups {
-            let new = self.convert_new_chunk(reading, base_ctx, &combined);
+        for ChunkPlan { reading, pinned } in plan {
+            let new = match pinned {
+                Some(converted) => ComposingChunk { reading, converted },
+                None => self.convert_new_chunk(reading, base_ctx, &combined),
+            };
             combined.push_str(&new.converted);
             chunks.push(new);
         }
         chunks
     }
 
+    /// The chunk plan for `chars`: the split-rule groups, with the head of
+    /// the reading (and the head of every manually broken-off chunk)
+    /// carved into a pinned user-dictionary chunk when one applies. Only
+    /// those heads are tried: a dictionary with hundreds of thousands of
+    /// words matches somewhere inside almost any sentence, and chopping the
+    /// model's input there would do more harm than the pin does good.
+    pub(super) fn plan_chunks(&self, chars: &[char], pin: bool) -> Vec<ChunkPlan> {
+        let mut plan = Vec::new();
+        let mut offset = 0;
+        for reading in self.split_chunks(chars) {
+            let len = reading.chars().count();
+            let at_head = offset == 0 || self.chunk_breaks.contains(&offset);
+            let pinned = (pin && at_head)
+                .then(|| self.pin_user_word(&reading))
+                .flatten();
+            match pinned {
+                Some((word_len, surface)) => {
+                    let (word, rest) = reading.split_at(word_len);
+                    plan.push(ChunkPlan {
+                        reading: word.to_string(),
+                        pinned: Some(surface),
+                    });
+                    if !rest.is_empty() {
+                        // A tail of bare suffixes stays as typed; anything
+                        // longer goes to the model with the word as context.
+                        let pinned = self.is_suffix_run(rest).then(|| rest.to_string());
+                        plan.push(ChunkPlan {
+                            reading: rest.to_string(),
+                            pinned,
+                        });
+                    }
+                }
+                None => plan.push(ChunkPlan {
+                    reading,
+                    pinned: None,
+                }),
+            }
+            offset += len;
+        }
+        plan
+    }
+
     /// Start of the trailing run of Japanese chunks that fits `budget`
     /// chars, always at least the last chunk. Snapped to chunk boundaries,
     /// so a digit or symbol run is never swallowed into the span, and a
-    /// manual break is a wall: the user froze everything left of it.
-    pub(super) fn trailing_chunks_start(&self, chars: &[char], budget: usize) -> usize {
-        let chunks = self.split_chunks(chars);
+    /// manual break is a wall: the user froze everything left of it. With
+    /// `pin`, a pinned dictionary chunk is a wall too — its text is settled,
+    /// so the beam covers only what follows it (nothing, when the reading
+    /// ends on the word).
+    pub(super) fn trailing_chunks_start(&self, chars: &[char], budget: usize, pin: bool) -> usize {
+        let chunks = self.plan_chunks(chars, pin);
         let mut start = chars.len();
         let mut taken = 0;
         for chunk in chunks.iter().rev() {
             // A chunk with no Japanese has nothing to convert and must never
             // reach the model, so it walls the span off — including when it
-            // is the last chunk, which then leaves the span empty.
-            if !chunk.chars().any(is_japanese) {
+            // is the last chunk, which then leaves the span empty. So does
+            // a pinned word: the dictionary already converted it.
+            if chunk.pinned.is_some() || !chunk.reading.chars().any(is_japanese) {
                 break;
             }
-            let len = chunk.chars().count();
+            let len = chunk.reading.chars().count();
             if taken > 0 && taken + len > budget {
                 break;
             }
@@ -107,9 +176,14 @@ impl InputMethodEngine {
     /// uses: chunks containing Japanese go through the model (cache hits
     /// while the user types), purely non-Japanese chunks pass through
     /// verbatim, and each chunk's lctx is `base_ctx` plus the converted text
-    /// before it.
-    pub(super) fn convert_on_chunk_grid(&mut self, chars: &[char], base_ctx: &str) -> String {
-        self.convert_chunks(chars, base_ctx)
+    /// before it. `pin` as in [`Self::convert_chunks`].
+    pub(super) fn convert_on_chunk_grid(
+        &mut self,
+        chars: &[char],
+        base_ctx: &str,
+        pin: bool,
+    ) -> String {
+        self.convert_chunks(chars, base_ctx, pin)
             .into_iter()
             .map(|c| c.converted)
             .collect()
@@ -256,11 +330,11 @@ impl InputMethodEngine {
     /// counter at 0 as the composing line does.
     pub(super) fn caret_chunk_reading(&self) -> String {
         let chars: Vec<char> = self.input_buf.reading().chars().collect();
-        let groups = self.split_chunks(&chars);
-        let lengths: Vec<usize> = groups.iter().map(|g| g.chars().count()).collect();
-        groups
-            .get(self.caret_chunk_index(&lengths))
-            .cloned()
+        let plan = self.plan_chunks(&chars, true);
+        let lengths: Vec<usize> = plan.iter().map(|c| c.reading.chars().count()).collect();
+        plan.into_iter()
+            .nth(self.caret_chunk_index(&lengths))
+            .map(|c| c.reading)
             .unwrap_or_default()
     }
 

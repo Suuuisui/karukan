@@ -93,6 +93,10 @@ pub struct EngineConfig {
     pub beam_chars: usize,
     /// Beam width: how many alternatives the beam returns
     pub beam_width: usize,
+    /// What may follow a user-dictionary word at the head of the reading
+    /// for it to be pinned to its surface (particles, honorifics…). See
+    /// `chunk::pin`.
+    pub dict_suffixes: Vec<String>,
     /// Maximum acceptable latency in milliseconds for auto-suggest (0 = disabled)
     /// When a main model conversion exceeds this, the engine adaptively switches to light_model
     pub max_latency_ms: u64,
@@ -132,6 +136,7 @@ impl EngineConfig {
             chunk_alphabets: settings.conversion.chunk_alphabets,
             beam_chars: settings.conversion.beam_chars,
             beam_width: settings.conversion.beam_width,
+            dict_suffixes: settings.conversion.dict_suffixes.clone(),
             max_latency_ms: settings.conversion.max_latency_ms,
             strategy: settings.conversion.strategy,
             verbose: settings.display.verbose,
@@ -143,6 +148,49 @@ impl EngineConfig {
             date: settings.date.clone(),
         }
     }
+}
+
+/// The suffixes a pinned dictionary word may be followed by when no
+/// config.toml is loaded (mirrors `conversion.dict_suffixes` in
+/// default.toml).
+pub(in crate::core) fn default_dict_suffixes() -> Vec<String> {
+    [
+        "さん",
+        "さま",
+        "くん",
+        "ちゃん",
+        "し",
+        "せんせい",
+        "の",
+        "は",
+        "が",
+        "を",
+        "に",
+        "と",
+        "で",
+        "も",
+        "へ",
+        "から",
+        "まで",
+        "って",
+        "です",
+        "でした",
+        "や",
+        "か",
+        "より",
+        "とか",
+        "なら",
+        "だ",
+        "じゃ",
+        "こそ",
+        "しか",
+        "など",
+        "たち",
+        "ら",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 impl Default for EngineConfig {
@@ -157,6 +205,7 @@ impl Default for EngineConfig {
             chunk_alphabets: 0,
             beam_chars: 30,
             beam_width: 3,
+            dict_suffixes: default_dict_suffixes(),
             max_latency_ms: 100,
             strategy: StrategyMode::default(),
             verbose: false,
