@@ -520,9 +520,17 @@ impl Dictionary {
     ///
     /// Dictionaries earlier in the list have higher priority: their candidates
     /// appear first for the same reading. Returns `None` if the input is empty.
-    pub fn merge(dicts: Vec<Dictionary>) -> Result<Option<Self>> {
+    pub fn merge(mut dicts: Vec<Dictionary>) -> Result<Option<Self>> {
         if dicts.is_empty() {
             return Ok(None);
+        }
+
+        // A single dictionary is already a valid merge result: its trie is
+        // built and its candidates are sorted. Rebuilding the double-array
+        // trie here is by far the most expensive step (tens of seconds for
+        // several hundred thousand readings), so skip it.
+        if dicts.len() == 1 {
+            return Ok(dicts.pop());
         }
 
         // Collect all entries, grouped by reading
@@ -1097,6 +1105,24 @@ col0,col1,col2,4500,今日,col5,col6,col7,col8,col9,col10,キョウ
         assert!(merged.exact_match_search("きょうと").is_some());
         // "おおさか" from dict2
         assert!(merged.exact_match_search("おおさか").is_some());
+    }
+
+    #[test]
+    fn test_merge_single_dictionary() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "きょう\t今日\t名詞\t").unwrap();
+        writeln!(f, "きょう\t京\t名詞\t").unwrap();
+        writeln!(f, "きょうと\t京都\t名詞\t").unwrap();
+        f.flush().unwrap();
+        let dict = Dictionary::build_from_mozc_tsv(f.path()).unwrap();
+
+        let merged = Dictionary::merge(vec![dict]).unwrap().unwrap();
+        let r = merged.exact_match_search("きょう").unwrap();
+        assert_eq!(r.candidates.len(), 2);
+        assert_eq!(r.candidates[0].surface, "今日");
+        assert_eq!(r.candidates[1].surface, "京");
+        assert_eq!(merged.exact_match_search("きょうと").unwrap().candidates[0].surface, "京都");
+        assert!(merged.exact_match_search("なし").is_none());
     }
 
     #[test]
