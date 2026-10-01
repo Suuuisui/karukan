@@ -43,9 +43,7 @@ fn test_typing_opens_no_window() {
     assert!(closes_window(&result), "{:?}", result.actions);
     assert!(!opens_window(&result), "{:?}", result.actions);
     assert!(matches!(engine.state(), InputState::Composing { .. }));
-    // The dictionary word is pinned into the live preedit; the window
-    // still stays shut.
-    assert_eq!(engine.preedit().unwrap().text(), "愛");
+    assert_eq!(engine.preedit().unwrap().text(), "あい");
 }
 
 #[test]

@@ -1121,7 +1121,10 @@ col0,col1,col2,4500,今日,col5,col6,col7,col8,col9,col10,キョウ
         assert_eq!(r.candidates.len(), 2);
         assert_eq!(r.candidates[0].surface, "今日");
         assert_eq!(r.candidates[1].surface, "京");
-        assert_eq!(merged.exact_match_search("きょうと").unwrap().candidates[0].surface, "京都");
+        assert_eq!(
+            merged.exact_match_search("きょうと").unwrap().candidates[0].surface,
+            "京都"
+        );
         assert!(merged.exact_match_search("なし").is_none());
     }
 

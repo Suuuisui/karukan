@@ -122,6 +122,16 @@ impl LearningCache {
         removed
     }
 
+    /// How many times `surface` was committed for exactly `reading` (0 if
+    /// never). Unlike [`lookup`](Self::lookup)'s score this ignores
+    /// recency: a habit is how often, not how lately.
+    pub fn frequency(&self, reading: &str, surface: &str) -> u32 {
+        self.entries
+            .get(reading)
+            .and_then(|entries| entries.iter().find(|e| e.surface == surface))
+            .map_or(0, |e| e.frequency)
+    }
+
     /// Exact-match lookup: returns `(surface, score)` pairs sorted by score descending.
     pub fn lookup(&self, reading: &str) -> Vec<(String, f64)> {
         let now = now_unix();

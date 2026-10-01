@@ -77,6 +77,7 @@ impl InputMethodEngine {
 
         self.init_system_dictionary(settings.conversion.dict_path.as_deref());
         self.init_user_dictionaries();
+        self.init_pin_words();
         self.init_learning_cache(
             settings.learning.enabled,
             LearningConfig {
@@ -239,6 +240,21 @@ impl InputMethodEngine {
         self.learning = Some(cache);
     }
 
+    /// Load the hand-registered words to pin from `pin_words.tsv` (a
+    /// missing file means nothing is pinned). A few hundred lines: read
+    /// straight into a map, no trie.
+    pub fn init_pin_words(&mut self) {
+        let Some(path) = Settings::pin_words_file() else {
+            return;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            debug!("No pin words file at {:?}", path);
+            return;
+        };
+        self.dicts.pin = parse_pin_words(&text);
+        debug!("Pin words loaded: {} from {:?}", self.dicts.pin.len(), path);
+    }
+
     /// Initialize user dictionaries by scanning the user dictionary directory.
     ///
     /// All files in the directory are loaded with `Dictionary::load_auto()`
@@ -314,4 +330,27 @@ impl InputMethodEngine {
             }
         }
     }
+}
+
+/// Parse `pin_words.tsv`: `reading\tsurface[\t...]` per line, `#` comments,
+/// the first surface per reading wins (the file is written in priority
+/// order).
+pub(super) fn parse_pin_words(text: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for line in text.lines() {
+        if line.starts_with('#') {
+            continue;
+        }
+        let mut cols = line.split('\t');
+        let (Some(reading), Some(surface)) = (cols.next(), cols.next()) else {
+            continue;
+        };
+        let (reading, surface) = (reading.trim(), surface.trim());
+        if reading.is_empty() || surface.is_empty() {
+            continue;
+        }
+        map.entry(reading.to_string())
+            .or_insert_with(|| surface.to_string());
+    }
+    map
 }

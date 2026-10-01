@@ -290,6 +290,13 @@ impl Settings {
         Self::config_dir().map(|dir| dir.join("config.toml"))
     }
 
+    /// The hand-registered words pinned at the head of a reading
+    /// (Mozc TSV: `reading\tsurface`, first entry per reading wins).
+    /// Default: `~/.local/share/karukan-im/pin_words.tsv`
+    pub fn pin_words_file() -> Option<PathBuf> {
+        Self::data_dir().map(|dir| dir.join("pin_words.tsv"))
+    }
+
     /// Get the user dictionary directory path.
     ///
     /// All files in this directory are automatically loaded as user dictionaries.

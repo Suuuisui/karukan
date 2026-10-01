@@ -354,6 +354,11 @@ pub(in crate::core) struct Dictionaries {
     pub system: Option<Dictionary>,
     /// User dictionary (merged from user_dict_paths)
     pub user: Option<Dictionary>,
+    /// The words the user registered by hand, reading → surface, loaded
+    /// from `pin_words.tsv`. Only these are pinned at the head of a reading
+    /// (`chunk::pin`): a bulk user dictionary holds phrase-shaped noise
+    /// (「どうする」→「どうする？」) that must never take over live text.
+    pub pin: std::collections::HashMap<String, String>,
 }
 
 /// Conversion model dispatch strategy based on input length
